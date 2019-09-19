@@ -1,25 +1,28 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using BCI2K.cs;
-using WebSocketSharp;
+using System.Threading;
+using System.Threading.Tasks;
+
 namespace Example
 {
     class Program
     {
-        public static Operator bci = new Operator("ws://127.0.0.1:20100");
-        static void Main(string[] args)
+        public static BCI2K_OperatorConnection bci_Op = new BCI2K_OperatorConnection("ws://127.0.0.1:80");
+  //      public static BCI2K_DataConnection bci_Source = new BCI2K_DataConnection("ws://127.0.0.1:20100");
+        static async Task Main(string[] args)
         {
+            Thread.Sleep(1000);
+            await bci_Op.Connect();
+            while (bci_Op.operatorWS.State == System.Net.WebSockets.WebSocketState.Open)
+            {
+                //await bci_Op.Send("Get System State");
+                bci_Op.getVersion();
+                await bci_Op.Receive();
+                Thread.Sleep(1000);
 
-            bci.connect();
-            Console.Read();
-            //while (true)
-            //{
-            //    Console.WriteLine("BCI Command: ");
-            //    bci.sendMsg(Console.ReadLine());
-            //}
+
+            }
+            Console.ReadLine();
         }
     }
 }
