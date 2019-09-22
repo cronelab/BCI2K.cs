@@ -1,9 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Threading;
 using WebSocketSharp;
 using System.Text;
-using System.Threading.Tasks;
 using System.Linq;
 namespace BCI2K.cs
 {
@@ -23,8 +21,7 @@ namespace BCI2K.cs
 
             string opcode = arr[0];
             string id = arr[1];
-            string[] msg = arr.SubArray(2, arr.Length-2);
-            //ArraySegment<string> msg = new ArraySegment<string>(arr, 2, arr.Length - 2);
+            string[] msg = arr.SubArray(2, arr.Length - 2);
             switch (opcode)
             {
                 case "S":
@@ -109,6 +106,10 @@ namespace BCI2K.cs
         {
             operatorWS.Send($"E {messageCount} Load Parameterfile {prm}; ");
         }
+        public void addParameter(string prm)
+        {
+            operatorWS.Send($"E {messageCount} Add Parameter {prm}; ");
+        }
         public void setParameter(string prm1, string prm2)
         {
             operatorWS.Send($"E {messageCount} Set Parameter {prm1} {prm2}; ");
@@ -137,7 +138,16 @@ namespace BCI2K.cs
         {
             operatorWS.Send($"E {messageCount} Add EVENT {name} {bitWidth} {initialVal}; ");
         }
+        public void startExecutable(string name, string arguments)
+        {
+            operatorWS.Send($"E {messageCount} Start executable {name} --{arguments}; ");
+        }
+        public void startupSystem()
+        {
+            operatorWS.Send($"E {messageCount} Startup System; ");
+        }
     }
+
     public class BCI2K_DataConnection
     {
         public WebSocket dataWS;
@@ -151,19 +161,40 @@ namespace BCI2K.cs
         public int nElements;
         public int nChannels;
         public string signalName;
-        public string[] signalProps;
+
         public List<float> signal = new List<float>();
         Dictionary<string, int> vecOrder = new Dictionary<string, int>();
         Dictionary<string, int> stateOrder = new Dictionary<string, int>();
         public List<KeyValuePair<string, int>> stateFormat;
         public List<KeyValuePair<string, int>> stateVecOrder;
 
+        public struct units
+        {
+            public int[] offset;
+            public int[] gain;
+            public string[] symbol;
+            public int[] vmin;
+            public int[] vmax;
+        }
+        public struct SignalProperties
+        {
+            public string name;
+            public List<string> channels;
+            public List<string> elements;
+            public int numelements;
+            public string signaltype;
+            public units channelUnit;
+            public units elementUnit;
+            public units valueUnit;
+        }
+        public SignalProperties sig;
+        
         public BCI2K_DataConnection(string address)
         {
             dataWS = new WebSocket(address);
             dataWS.OnMessage += (sender, e) => OnBinaryMessageReceived(e.RawData);
         }
-
+        
         public event Action onGenericSignal;
         public event Action onSignalProperties;
 
@@ -186,12 +217,13 @@ namespace BCI2K.cs
             }
             else if (msg[0] == 5)
             {
-                decodeStateVector(msg);
+                //decodeStateVector(msg);
             }
 
         }
         private void decodeStateFormat(byte[] msg)
         {
+
             var message = Encoding.ASCII.GetString(msg).Split('\n');
             foreach (var mess in message)
             {
@@ -230,8 +262,7 @@ namespace BCI2K.cs
             }
             byte[] signalArray = new byte[msg.Length - 7];
             Array.Copy(msg, 7, signalArray, 0, msg.Length - 7);
-            onGenericSignal?.Invoke();
-            
+
             signal.Clear();
             for (int i = 0; i < nChannels * nElements; i++)
             {
@@ -241,105 +272,179 @@ namespace BCI2K.cs
                 signal.Add(myFloat);
             }
             onGenericSignal?.Invoke();
-
-
         }
         private void decodeSignalProperties(byte[] message)
         {
-            string strMessage = Encoding.ASCII.GetString(message);
-            strMessage = strMessage.Replace("{", " { ");
-            strMessage = strMessage.Replace("}", " } ");
-
-
-            var msg = strMessage.Split(' ').ToList();
-            for (int i = 0; i < msg.Count; i++)
+            sig.channels = new List<string>();
+            sig.elements = new List<string>();
+            
+            string propstr = Encoding.ASCII.GetString(message);
+            propstr = propstr.Replace("{", " { ");
+            propstr = propstr.Replace("}", " } ");
+            var props = propstr.Split(' ').ToList();
+            for (int i = 0; i < props.Count; i++)
             {
-                if (string.IsNullOrWhiteSpace(msg[i]))
+                if (string.IsNullOrWhiteSpace(props[i]))
                 {
-                    msg.Remove(msg[i]);
+                    props.Remove(props[i]);
                 }
             }
+            int pidx = 0;
+            sig.name = props[pidx++];
 
-
-            signalName = msg[0];
-
-            var count = 1;
-            for (int i = 0; i < msg.Count; i++)
+            if (props[pidx] == "{")
             {
-                if (msg[i] == "{")
+                while (props[++pidx] != "}")
                 {
-                    i++;
-                    while (msg[i] != "}")
-                    {
-                        if (count == 1)
-                        {
-                            signalChannels.Add(msg[i]);
-                        }
-                        else if (count == 2)
-                        {
-                            signalElements.Add(msg[i]);
-                        }
-                        i++;
-                    }
-                    count++;
+                    sig.channels.Add(props[pidx]);
+                }
+                pidx++;
+            }
+            else
+            {
+                int numChannels = Int32.Parse(props[pidx++]);
+                for (int i = 0; i < numChannels; i++)
+                {
+                    sig.channels.Add((i + 1).ToString());
                 }
             }
-            signalProps = new string[6 * signalChannels.Count];
-
-            for (int i = 0; i < signalChannels.Count; i++)
+            if (props[pidx] == "{")
             {
-                signalProps[i * 6] = signalChannels[i];
-                signalProps[i * 6 + 1] = signalElements[(i * 4) + i + 0];
-                signalProps[i * 6 + 2] = signalElements[(i * 4) + i + 1];
-                signalProps[i * 6 + 3] = signalElements[(i * 4) + i + 2];
-                signalProps[i * 6 + 4] = signalElements[(i * 4) + i + 3];
-                signalProps[i * 6 + 5] = signalElements[(i * 4) + i + 4];
+                while (props[++pidx] != "}")
+                {
+                    sig.elements.Add(props[pidx]);
+                }
+                pidx++;
             }
+            else
+            {
+                int numChannels = Int32.Parse(props[pidx++]);
+                for (int i = 0; i < numChannels; i++)
+                {
+                    sig.elements.Add((i + 1).ToString());
+                }
+            }
+            sig.numelements = sig.elements.Count;
+            sig.signaltype = props[pidx++];
+            Console.WriteLine("Channel Offset");
+            Console.WriteLine(props[pidx++].Trim()); //offset
+            Console.WriteLine("Channel gain");
+            Console.WriteLine(props[pidx++].Trim()); //gain 
+            Console.WriteLine("Channel symbol");
+            Console.WriteLine(props[pidx++].Trim()); //symbol
+            Console.WriteLine("Channel vmin");
+            Console.WriteLine(props[pidx++].Trim()); //vmin
+            Console.WriteLine("Channel vmax");
+            Console.WriteLine(props[pidx++].Trim()); //vmax
+            Console.WriteLine("Element Offset");
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine("Element gain");
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine("Element symbol");
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine("Element vmin");
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine("Element vmax");
+            Console.WriteLine(props[pidx++].Trim());
+            pidx++;
+            for(int i = 0; i < sig.channels.Count; i++)
+            {
+                //sig.valueUnit.offset;
+            }
+            Console.WriteLine("Value Offset");
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine("Value gain");
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine("Value symbol");
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine("Value vmin");
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine("Value vmax");
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine("Value Offset");
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine(props[pidx++].Trim());
+            Console.WriteLine(props[pidx++].Trim());
+            
+
+            //signalProps = new string[6 * signalChannels.Count];
+
+            //for (int i = 0; i < signalChannels.Count; i++)
+            //{
+            //    signalProps[i * 6] = signalChannels[i];
+            //    signalProps[i * 6 + 1] = signalElements[(i * 4) + i + 0];
+            //    signalProps[i * 6 + 2] = signalElements[(i * 4) + i + 1];
+            //    signalProps[i * 6 + 3] = signalElements[(i * 4) + i + 2];
+            //    signalProps[i * 6 + 4] = signalElements[(i * 4) + i + 3];
+            //    signalProps[i * 6 + 5] = signalElements[(i * 4) + i + 4];
+            //}
             onSignalProperties?.Invoke();
-
-        }
-        private void decodeStateVector(byte[] msg)
-        {
-            //for (int j = 1; j < msg.Length; j++)
-            //{
-            //    Console.WriteLine(msg[j]);
-            //}
-            //int i = 1;
-            //List<byte> a = new List<byte>();
-            //while (buf.Array[i] != 0)
-            //{
-            //    a.Add(buf.Array[i]);
-            //    i++;
-            //}
-
-            //var zeroInd = 1;
-            //List<byte> stateVectorLength = new List<byte>();
-            //List<byte> subsStateVectors = new List<byte>();
-
-            //for (int k = 1; i < buf.Array.Length; k++)
-            //{
-            //    // print("" + i + ": "+ message[i]);
-            //    while (buf.Array[k] != 0 && zeroInd < 3)
-            //    {
-            //        // print("" + i + ": " + message[i]);
-
-            //        if (zeroInd == 1)
-            //        {
-            //            stateVectorLength.Add(buf.Array[i]);
-            //        }
-            //        else
-            //        {
-            //            subsStateVectors.Add(buf.Array[i]);
-            //        }
-            //        k++;
-            //    }
-            //    zeroInd++;
-            //}
-
-            // print(System.Text.Encoding.ASCII.GetString(stateVectorLength.ToArray()));       //56        //wtf do these mean?
-            // print(System.Text.Encoding.ASCII.GetString(subsStateVectors.ToArray()));        //101
-
         }
     }
-}
+        //private void decodeStateVector(byte[] msg)
+        //{
+        //    for (int j = 1; j < msg.Length; j++)
+        //    {
+        //        //Console.WriteLine(msg[j]);
+        //    }
+        //    int i = 1;
+        //    List<byte> a = new List<byte>();
+        //    while (msg[i] != 0)
+        //    {
+        //        a.Add(msg[i]);
+        //        i++;
+        //    }
+
+        //    var zeroInd = 1;
+        //    List<byte> stateVectorLength = new List<byte>();
+        //    List<byte> subsStateVectors = new List<byte>();
+
+        //    for (int k = 1; i < msg.Length; k++)
+        //    {
+        //        // print("" + i + ": "+ message[i]);
+        //        while (msg[k] != 0 && zeroInd < 3)
+        //        {
+        //            // print("" + i + ": " + message[i]);
+
+        //            if (zeroInd == 1)
+        //            {
+        //                stateVectorLength.Add(msg[i]);
+        //            }
+        //            else
+        //            {
+        //                subsStateVectors.Add(msg[i]);
+        //            }
+        //            k++;
+        //        }
+        //        zeroInd++;
+        //    }
+
+        //    //Console.WriteLine(System.Text.Encoding.ASCII.GetString(stateVectorLength.ToArray()));       //56        //wtf do these mean?
+        //    //Console.WriteLine(System.Text.Encoding.ASCII.GetString(subsStateVectors.ToArray()));        //101
+
+        //}
+    }
+    public class BCI2K_ConnectorConnection
+    {
+        public WebSocket connectorWS;
+
+        public BCI2K_ConnectorConnection(string address)
+        {
+            connectorWS = new WebSocket(address);
+            connectorWS.OnMessage += (sender, e) => OnMessageReceived(e.Data);
+
+        }
+
+        private void OnMessageReceived(string message)
+        {
+            //Console.WriteLine(message);
+        }
+    }
 
